@@ -101,7 +101,7 @@ void html_widget::set_base_url(const litehtml::tchar_t* base_url)
 
 Glib::RefPtr<Gdk::Pixbuf> html_widget::get_image(const litehtml::tchar_t* url, bool redraw_on_ready)
 {
-	Glib::RefPtr< Gio::InputStream > stream = m_http.load_file(url);
+	Glib::RefPtr< Gio::InputStream > stream = m_http.load_url(url);
 	Glib::RefPtr<Gdk::Pixbuf> ptr = Gdk::Pixbuf::create_from_stream(stream);
 	return ptr;
 }
@@ -244,7 +244,7 @@ void html_widget::update_cursor()
 void html_widget::load_text_file(const litehtml::tstring& url, litehtml::tstring& out)
 {
     out.clear();
-    Glib::RefPtr< Gio::InputStream > stream = m_http.load_file(url);
+    Glib::RefPtr< Gio::InputStream > stream = m_http.load_url(url);
     gssize sz;
     char buff[1025];
     while( (sz = stream->read(buff, 1024)) > 0 )

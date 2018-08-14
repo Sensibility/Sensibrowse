@@ -4,7 +4,7 @@
 
 browser_window::browser_window(litehtml::context* html_context) : m_html(html_context, this), m_go_button("_Go", true)
 {
-	set_title("litehtml");
+	set_title("Sensibrowse");
 
 	add(m_vbox);
 	m_vbox.show();

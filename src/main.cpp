@@ -1,7 +1,10 @@
+#include <iostream>
+
 #include "globals.h"
 #include "browser_wnd.h"
+#include "url.h"
 
-char master_css[] = 
+char master_css[] =
 {
 #include "master.css.inc"
 ,0
@@ -9,7 +12,7 @@ char master_css[] =
 
 int main (int argc, char *argv[])
 {
-	Glib::RefPtr<Gtk::Application> app = Gtk::Application::create(argc, argv, "litehtml.browser");
+	Glib::RefPtr<Gtk::Application> app = Gtk::Application::create(argc, argv, "sensible.browser");
 
 	litehtml::context html_context;
 	html_context.load_master_stylesheet(master_css);
