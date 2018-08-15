@@ -1,9 +1,11 @@
-#ifndef HTTP
-#define HTTP
+#ifndef HTTP_LOADER
+#define HTTP_LOADER
 
-// #ifdef DEBUG
+#ifdef DEBUG
 #include <iostream>
-// #endif
+#endif
+
+#include <exception>
 
 extern "C" {
 #include <sys/types.h>

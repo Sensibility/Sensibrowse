@@ -22,6 +22,7 @@ pkg_check_modules(LB_LIBS REQUIRED fontconfig gdkmm-3.0 gtkmm-3.0 libcurl cairo)
 
 set(SOURCE  ${SENSIBROWSE_PATH}/main.cpp
 			${SENSIBROWSE_PATH}/url.cpp
+			${SENSIBROWSE_PATH}/http.cpp
             ${SENSIBROWSE_PATH}/utils.cpp
             ${SENSIBROWSE_PATH}/html_widget.cpp
             ${CONTAINER_PATH}/container_linux.cpp

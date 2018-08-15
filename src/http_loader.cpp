@@ -1,5 +1,6 @@
 #include "http_loader.h"
 #include "url.h"
+#include "http.h"
 
 http_loader::http_loader()
 {
@@ -62,22 +63,113 @@ Glib::RefPtr< Gio::InputStream > http_loader::load_url(const litehtml::tstring& 
 	std::cout << "Connected." << std::endl;
 	#endif
 
-	std::string request = "GET " + parsedURL.path + " HTTP/1.1\r\nConnection: Keep-Alive\r\nAccept-Encoding: identity\r\nAccept: text/html,text/plain;q=0.9,text/*;q=0.8,*/*;q=0.7\r\nAccept-Charset: utf-8\r\nAccept-Language: en-US\r\nDNT: 1\r\nUser-Agent: sensibrowse/0.1\r\nScript: paradisi,wasm,javascript;q=0.9\r\nHost: " + parsedURL.host + "\r\n\r\n";
+	std::string request = "GET " + parsedURL.path + " HTTP/1.1\r\nConnection: Keep-Alive\r\nAccept-Encoding: identity\r\nAccept: text/html,text/plain;q=0.9,text/*;q=0.8,*/*;q=0.7\r\nAccept-Charset: utf-8\r\nAccept-Language: en-US\r\nDNT: 1\r\nUser-Agent: sensibrowse/0.1\r\nScript: paradisi,wasm,none;q=0.9,javascript;q=0.8\r\nHost: " + parsedURL.host + "\r\n\r\n";
 	std::cout << request;
-	size_t dataSize = send(this->sock, request.c_str(), 228, 0);
+
+	size_t dataSize = send(this->sock, request.c_str(), request.length(), 0);
 
 	#ifdef DEBUG
 	std::cout << "Sent " << dataSize << " bytes of data to " << this->url << '.' << std::endl;
 	#endif
 
-	char buff[4096] = {'\0'};
-	dataSize = recv(this->sock, buff, 4096, 0);
+	std::string response = "";
 
-	#ifdef DEBUG
-	std::cout << "Recieved " << dataSize << " bytes from " << this->url << '.' << std::endl;
-	#endif
+	do {
+		char buff[4096] = {'\0'};
+		dataSize = recv(this->sock, buff, 4096, 0);
 
-	std::cout << buff << std::endl;
+		response += buff;
+
+		#ifdef DEBUG
+		std::cout << "Recieved " << dataSize << " bytes from " << this->url << '.' << std::endl;
+		#endif
+
+	} while (dataSize == 4096);
+
+	HTTPResponse resp = response.c_str();
+	response.clear();
+
+	if (resp.transfer_encoding == "chunked" or resp.transfer_encoding == "Chunked") {
+		#ifdef DEBUG
+		std::cout << "Chunked encoding, fetching and parsing chunks" << std::endl;
+		#endif
+
+		std::stringstream ss;
+		response = resp.body;
+
+		// First we should parse the chunk we already have
+		resp.body.clear();
+		unsigned int chunklen = 0;
+
+		size_t pos = response.find("\r\n");
+		ss << std::hex << response.substr(0, pos);
+		ss >> chunklen;
+		std::string chunk = response.substr(pos+2, chunklen);
+
+		#ifdef DEBUG
+		std::cout << "===============   Chunk   ===============" << std::endl << chunk << std::endl << "================   End   ================" << std::endl;
+		#endif
+
+		resp.body = chunk;
+
+		response = response.substr(pos+4+chunklen);
+
+		unsigned int CHUNKLEN = 0;
+		do {
+
+
+			do {
+				char buff[4096] = {'\0'};
+				dataSize = recv(this->sock, buff, 4096, 0);
+
+				#ifdef DEBUG
+				std::cout << "Recieved " << dataSize << " bytes from " << this->url << std::endl;
+				#endif
+
+				response += buff;
+			} while (dataSize == 4096);
+
+			pos = response.find("\r\n");
+
+			if (pos == std::string::npos) {
+				break;
+			}
+
+			std::string tmp = response.substr(0, pos);
+
+			std::stringstream s;
+			s << std::hex << tmp;
+			s >> CHUNKLEN;
+
+			#ifdef DEBUG
+			std::cout << "Chunk length: " << CHUNKLEN << 'B' << std::endl;
+			if (CHUNKLEN == 0) {
+				std::cout << '\'' << tmp << '\'' << std::endl;
+			}
+			#endif
+
+			chunk = response.substr(pos+2, CHUNKLEN);
+
+			#ifdef DEBUG
+			std::cout << "===============   Chunk   ===============" << std::endl << chunk << "================   End   ================" << std::endl;
+			#endif
+
+			resp.body += chunk;
+
+			response = response.substr(pos+4+CHUNKLEN);
+
+			#ifdef DEBUG
+			if (!response.empty()) {
+				std::cout << "Remaining response text after chunk parse: '" << response << '\'' << std::endl;
+			}
+			#endif
+
+		} while (CHUNKLEN > 0);
+	}
+
+	std::cout << resp.toString() << std::endl;
+
+	stream->add_data(resp.toString());
 
 	// if(m_curl)
 	// {
