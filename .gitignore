@@ -49,3 +49,5 @@ CMakeCache.txt
 CMakeFiles
 Makefile
 cmake_install.cmake
+# Built master css rules
+src/master.css.inc
