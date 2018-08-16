@@ -6,6 +6,7 @@
 #endif
 
 #include <exception>
+#include <cstdlib>
 
 extern "C" {
 #include <sys/types.h>
@@ -15,6 +16,10 @@ extern "C" {
 }
 
 #include "globals.h"
+
+#ifndef BUFFER_SIZE
+#define BUFFER_SIZE 0x2000
+#endif
 
 static const struct protoent* TCP = getprotobyname("tcp");
 static const struct addrinfo hint = {
@@ -31,18 +36,19 @@ static const struct addrinfo hint = {
 
 class http_loader
 {
-	int sock;
-	std::string url;
-
 public:
+	int sock;
+	bool connected = false;
+	std::string url;
+	char* buffer;
+
 	http_loader();
 	~http_loader();
 
 	Glib::RefPtr< Gio::InputStream > load_url(const litehtml::tstring&);
 	const char* get_url() const;
 	static std::string getHostFromURL(const char*);
-
-private:
+	bool Connect(const std::string&);
 	static size_t curlWriteFunction( void *ptr, size_t size, size_t nmemb, void *stream );
 };
 

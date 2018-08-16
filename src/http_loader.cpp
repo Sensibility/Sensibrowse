@@ -5,11 +5,13 @@
 http_loader::http_loader()
 {
 	sock = socket(AF_INET, SOCK_STREAM, TCP->p_proto);
+	buffer = new char[BUFFER_SIZE];
 }
 
 http_loader::~http_loader()
 {
 	close(sock);
+	delete[] buffer;
 }
 
 size_t http_loader::curlWriteFunction( void *ptr, size_t size, size_t nmemb, void *stream )
@@ -17,6 +19,44 @@ size_t http_loader::curlWriteFunction( void *ptr, size_t size, size_t nmemb, voi
 	Glib::RefPtr< Gio::MemoryInputStream >* s = (Glib::RefPtr< Gio::MemoryInputStream >*) stream;
 	(*s)->add_data(ptr, size * nmemb);
 	return size * nmemb;
+}
+
+bool http_loader::Connect(const std::string& host) {
+	// Attempting to (re)connect to the host specified by host
+	this->connected = false;
+	struct addrinfo* addrs;
+	struct addrinfo* addr;
+	int addrinfoResponse = getaddrinfo(host.c_str(), "80", &hint, &addrs);
+	if ( addrinfoResponse || addrs == nullptr) {
+		std::cerr << "Error fetching addrinfo for '" << host << '\'' << ": Host not known" << std::endl;
+		#ifdef DEBUG
+		std::cerr << "Error: " << gai_strerror(addrinfoResponse) << std::endl;
+		#endif
+		return false;
+	}
+
+	for (addr = addrs; addr != nullptr; addr = addr->ai_next) {
+		if (addr->ai_addrlen > 0 && addr->ai_family == AF_INET) {
+			break;
+		}
+	}
+
+	if (addr == nullptr) {
+		std::cerr << "Error making connection: Could not resolve '" << host << "' to IPv4 Address" << std::endl;
+		return false;
+	}
+
+	#ifdef DEBUG
+	std::cout << "Got the addrinfo" << std::endl << "Conecting..." << std::endl << std::endl;
+	#endif
+
+	if (connect(this->sock, addr->ai_addr, addr->ai_addrlen)) {
+		std::cerr << "Error making connection to: " << host << std::endl;
+		return false;
+	}
+	this->connected = true;
+	freeaddrinfo(addrs);
+	return true;
 }
 
 Glib::RefPtr< Gio::InputStream > http_loader::load_url(const litehtml::tstring& url)
@@ -31,60 +71,70 @@ Glib::RefPtr< Gio::InputStream > http_loader::load_url(const litehtml::tstring& 
 
 	Glib::RefPtr< Gio::MemoryInputStream > stream = Gio::MemoryInputStream::create();
 
-	struct addrinfo* addrs;
-	struct addrinfo* addr;
-	if (getaddrinfo((parsedURL.host).c_str(), "80", &hint, &addrs) || addrs == nullptr) {
-		std::cerr << "Error fetching url '" << parsedURL.toString() << '\'' << ": Host not known" << std::endl;
-		return stream;
-	}
-
-	for (addr = addrs; addr != nullptr; addr = addr->ai_next) {
-		std::cout << "Fetching..." << std::endl;
-		if (addr->ai_addrlen > 0 && addr->ai_family == AF_INET) {
-			break;
+	if (!this->connected) {
+		if(!this->Connect(parsedURL.host)) {
+			std::cerr << "Connection failed." << std::endl;
+			return stream;
 		}
-	}
-
-	if (addr == nullptr) {
-		std::cerr << "Error making connection" << std::endl;
-		return stream;
-	}
-
 	#ifdef DEBUG
-	std::cout << "Got the addrinfo" << std::endl << "Conecting..." << std::endl << std::endl;
+		std::cout << "Connected." << std::endl;
+	}
+	else {
+		std::cout << "Using existing connection..." << std::endl;
 	#endif
-
-	if (connect(this->sock, addrs->ai_addr, addrs->ai_addrlen)) {
-		std::cerr << "Error making connection to: " << parsedURL.toString() << std::endl;
-		return stream;
 	}
 
-	#ifdef DEBUG
-	std::cout << "Connected." << std::endl;
-	#endif
 
 	std::string request = "GET " + parsedURL.path + " HTTP/1.1\r\nConnection: Keep-Alive\r\nAccept-Encoding: identity\r\nAccept: text/html,text/plain;q=0.9,text/*;q=0.8,*/*;q=0.7\r\nAccept-Charset: utf-8\r\nAccept-Language: en-US\r\nDNT: 1\r\nUser-Agent: sensibrowse/0.1\r\nScript: paradisi,wasm,none;q=0.9,javascript;q=0.8\r\nHost: " + parsedURL.host + "\r\n\r\n";
 	std::cout << request;
 
-	size_t dataSize = send(this->sock, request.c_str(), request.length(), 0);
+	size_t offset=0,  dataSize=0;
+	do {
+		dataSize = send(this->sock, request.c_str() + offset, request.length() - offset, 0);
+		#ifdef DEBUG
+		std::cout << "Sent " << dataSize << " bytes of data to " << this->url << '.' << std::endl;
+		#endif
 
-	#ifdef DEBUG
-	std::cout << "Sent " << dataSize << " bytes of data to " << this->url << '.' << std::endl;
-	#endif
+		offset += dataSize > 0 ? dataSize : 0;
+		if (dataSize <= 0 ) {
+			#ifdef DEBUG
+			std::cout << "Disconnect detected; attempting reconnect" << std::endl;
+			#endif
+
+			if (!this->Connect(parsedURL.host)) {
+				return stream;
+			}
+		}
+	} while(offset < request.length());
+
 
 	std::string response = "";
 
 	do {
-		char buff[4096] = {'\0'};
-		dataSize = recv(this->sock, buff, 4096, 0);
+		std::memset(this->buffer, '\0', BUFFER_SIZE);
+		dataSize = recv(this->sock, this->buffer, BUFFER_SIZE, 0);
 
-		response += buff;
+		if (dataSize < 0) {
+			#ifdef DEBUG
+			std::cout << "Disconnect detected; attempting reconnect" << std::endl;
+			#endif
 
-		#ifdef DEBUG
-		std::cout << "Recieved " << dataSize << " bytes from " << this->url << '.' << std::endl;
-		#endif
+			if (!this->Connect(parsedURL.host)) {
+				return stream;
+			}
 
-	} while (dataSize == 4096);
+			dataSize = BUFFER_SIZE;
+
+		}
+		else {
+			response += this->buffer;
+
+			#ifdef DEBUG
+			std::cout << "Recieved " << dataSize << " bytes from " << this->url << '.' << std::endl;
+			#endif
+		}
+
+	} while (dataSize == BUFFER_SIZE);
 
 	HTTPResponse resp = response.c_str();
 	response.clear();
@@ -117,17 +167,16 @@ Glib::RefPtr< Gio::InputStream > http_loader::load_url(const litehtml::tstring& 
 		unsigned int CHUNKLEN = 0;
 		do {
 
-
 			do {
-				char buff[4096] = {'\0'};
-				dataSize = recv(this->sock, buff, 4096, 0);
+				std::memset(this->buffer, '\0', BUFFER_SIZE);
+				dataSize = recv(this->sock, this->buffer, BUFFER_SIZE, 0);
 
 				#ifdef DEBUG
 				std::cout << "Recieved " << dataSize << " bytes from " << this->url << std::endl;
 				#endif
 
-				response += buff;
-			} while (dataSize == 4096);
+				response += this->buffer;
+			} while (dataSize == BUFFER_SIZE);
 
 			pos = response.find("\r\n");
 
@@ -137,6 +186,7 @@ Glib::RefPtr< Gio::InputStream > http_loader::load_url(const litehtml::tstring& 
 
 			std::string tmp = response.substr(0, pos);
 
+			// The only way to clear the contents of a stringstream is to make a new stringstream...
 			std::stringstream s;
 			s << std::hex << tmp;
 			s >> CHUNKLEN;
@@ -169,22 +219,7 @@ Glib::RefPtr< Gio::InputStream > http_loader::load_url(const litehtml::tstring& 
 
 	std::cout << resp.toString() << std::endl;
 
-	stream->add_data(resp.toString());
-
-	// if(m_curl)
-	// {
-	//     curl_easy_setopt(m_curl, CURLOPT_URL, url.c_str());
-	//     curl_easy_setopt(m_curl, CURLOPT_WRITEDATA, &stream);
-	//     curl_easy_perform(m_curl);
-	//     char* new_url = NULL;
-	//     if(curl_easy_getinfo(m_curl, CURLINFO_EFFECTIVE_URL, &new_url) == CURLE_OK)
-	//     {
-	//         if(new_url)
-	//         {
-	//             m_url = new_url;
-	//         }
-	//     }
-	// }
+	stream->add_data(resp.body);
 
 	return stream;
 }
