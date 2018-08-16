@@ -1,7 +1,9 @@
 #ifndef HTTP
 #define HTTP
 
-#define BUFFER_SIZE 4096
+#ifndef BUFFER_SIZE
+#define BUFFER_SIZE 0x2000
+#endif
 
 #include <string>
 #include <sstream>
