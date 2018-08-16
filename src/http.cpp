@@ -32,10 +32,37 @@ void HTTPResponse::setStatusline(std::string sl) {
 	this->statusline = sl;
 
 	size_t pos = sl.find(' ');
+	if ( pos == std::string::npos) {
+		#ifdef DEBUG
+		std::cout << "Bad status line on request: '" << sl << '\'' << std::endl;
+		#endif
+		this->protocol = "HTTP/?.?";
+		this->status = 0;
+		this->reason = "UNKNOWN";
+		return;
+	}
 	this->protocol = sl.substr(0, pos);
 	sl = sl.substr(pos+1);
 
 	pos = sl.find(' ');
+	if ( pos == std::string::npos) {
+		#ifdef DEBUG
+		std::cout << "Bad status line on request: '" << sl << '\'' << std::endl;
+		#endif
+		this->status = 0;
+		this->reason = "UNKNOWN";
+		return;
+	}
+	std::string status = strip(sl.substr(0, pos));
+	if ( isnumber(status) ) {
+		this->status = std::stoul(status);
+	}
+	else {
+		this->status = 0;
+		#ifdef DEBUG
+		std::cout << "Error parsing status, '" << status << "' is not a number!" << std::endl;
+		#endif
+	}
 	this->status = std::stoul(sl.substr(0, pos));
 	this->reason = sl.substr(pos+1);
 }
