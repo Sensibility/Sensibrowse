@@ -6,6 +6,7 @@
 #endif
 
 #include <string>
+#include <cstring>
 #include <sstream>
 #include <vector>
 
@@ -23,9 +24,11 @@ extern "C" {
 
 class HTTPResponse {
 public:
-	HTTPResponse(const char*);
+	HTTPResponse(char*, const size_t&);
+	HTTPResponse(const std::string&);
 
 	void setStatusline(std::string);
+	void add_body(void*, const size_t&);
 	std::string toString();
 
 	std::string statusline;
@@ -33,8 +36,15 @@ public:
 	unsigned long status;
 	std::string reason;
 	std::string transfer_encoding;
+	size_t content_length = 0;
+	size_t headerlen;
+	std::pair<std::string, std::string> content_type;
+
+	// TODO: this should be a map/dict, not a list of pairs
 	std::vector<std::pair<std::string, std::string>> headers;
-	std::string body;
+
+	void* body = nullptr;
+	std::string Body();
 };
 
 class HTTPRequest {

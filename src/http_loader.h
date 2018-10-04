@@ -17,9 +17,13 @@ extern "C" {
 
 #include "globals.h"
 
+// This is the size of the buffer used to receive HTTP responses
 #ifndef BUFFER_SIZE
 #define BUFFER_SIZE 0x2000
 #endif
+
+// maximum number of retries for connection
+#define MAX_TRIES 3
 
 static const struct protoent* TCP = getprotobyname("tcp");
 static const struct addrinfo hint = {

@@ -21,9 +21,13 @@ size_t http_loader::curlWriteFunction( void *ptr, size_t size, size_t nmemb, voi
 	return size * nmemb;
 }
 
+// Attempts to (re)connect to the host specified by `host
+// Returns a boolean indicator of the operation's success, and sets the `http_loader`'s
+// `connected` member appropriately.
 bool http_loader::Connect(const std::string& host) {
-	// Attempting to (re)connect to the host specified by host
 	this->connected = false;
+	close(this->sock);
+	this->sock = socket(AF_INET, SOCK_STREAM, TCP->p_proto);
 	struct addrinfo* addrs;
 	struct addrinfo* addr;
 	int addrinfoResponse = getaddrinfo(host.c_str(), "80", &hint, &addrs);
@@ -61,9 +65,19 @@ bool http_loader::Connect(const std::string& host) {
 
 Glib::RefPtr< Gio::InputStream > http_loader::load_url(const litehtml::tstring& url)
 {
+	URL parsedURL=url;
+
+	if (url != this->url) {
+		// need to check if this is the same host
+		URL myURL = this->url;
+
+		if (parsedURL.host != myURL.host) {
+			this->connected = false;
+		}
+	}
+
 	this->url = url;
 
-	URL parsedURL=url;
 
 	#if DEBUG
 	std::cout << "Fetching via GET: " << url << " - " << parsedURL.repr() << std::endl;
@@ -108,13 +122,15 @@ Glib::RefPtr< Gio::InputStream > http_loader::load_url(const litehtml::tstring& 
 	} while(offset < request.length());
 
 
-	std::string response = "";
+	HTTPResponse* resp = nullptr;
+	size_t totalReceived = 0;
+	unsigned int tries = 0;
 
 	do {
 		std::memset(this->buffer, '\0', BUFFER_SIZE);
 		dataSize = recv(this->sock, this->buffer, BUFFER_SIZE, 0);
 
-		if (dataSize < 0) {
+		if (dataSize <= 0) {
 			#ifdef DEBUG
 			std::cout << "Disconnect detected; attempting reconnect" << std::endl;
 			#endif
@@ -122,51 +138,121 @@ Glib::RefPtr< Gio::InputStream > http_loader::load_url(const litehtml::tstring& 
 			if (!this->Connect(parsedURL.host)) {
 				return stream;
 			}
+			else {
+				tries++;
 
-			dataSize = BUFFER_SIZE;
+				if (tries > MAX_TRIES) {
+					return stream;
+				}
+				continue;
+			}
 
 		}
-		else {
-			response += this->buffer;
+		break;
+	} while (true);
+
+	totalReceived = dataSize;
+	resp = new HTTPResponse(this->buffer, dataSize);
+
+	// resp->add_body(this->buffer+resp->headerlen, dataSize-resp->headerlen);
+
+	// stream->add_data(resp->, dataSize-headerlen);
+
+	#ifdef DEBUG
+	std::cout << "Recieved " << dataSize << " bytes from " << this->url << '.' << std::endl;
+	#endif
+
+	if (resp->content_length > 0) {
+		stream->add_data(resp->body, dataSize-resp->headerlen);
+		size_t remaining = resp->content_length+resp->headerlen - dataSize;
+
+		#ifdef DEBUG
+		std::cout << "Need " << remaining << " more bytes from " << parsedURL.host << " to fill out Content-Length: " << resp->content_length << std::endl;
+		std::cout << "(remaining < resp.content_length)=" << (remaining < resp->content_length ? "true" : "false") << std::endl;
+		#endif
+
+		while (remaining > 0) {
+			std::memset(this->buffer, '\0', BUFFER_SIZE);
+			dataSize = recv(this->sock, this->buffer, BUFFER_SIZE, 0);
 
 			#ifdef DEBUG
 			std::cout << "Recieved " << dataSize << " bytes from " << this->url << '.' << std::endl;
 			#endif
+
+			stream->add_data(this->buffer, dataSize);
 		}
+	}
 
-	} while (dataSize == BUFFER_SIZE);
-
-	HTTPResponse resp = response.c_str();
-	response.clear();
-
-	if (resp.transfer_encoding == "chunked" or resp.transfer_encoding == "Chunked") {
+	else if (resp->transfer_encoding == "chunked" or resp->transfer_encoding == "Chunked") {
 		#ifdef DEBUG
 		std::cout << "Chunked encoding, fetching and parsing chunks" << std::endl;
 		#endif
 
-		std::stringstream ss;
-		response = resp.body;
+		std::string response = lstrip(std::string((char*)(resp->body)));
+		std::string body = response;
 
-		// First we should parse the chunk we already have
-		resp.body.clear();
+		std::string chunk;
+		// I don't know why, but if I remove this and try to re-use `chunklen` it won't work.
 		unsigned int chunklen = 0;
 
-		size_t pos = response.find("\r\n");
-		ss << std::hex << response.substr(0, pos);
-		ss >> chunklen;
-		std::string chunk = response.substr(pos+2, chunklen);
-
-		#ifdef DEBUG
-		std::cout << "===============   Chunk   ===============" << std::endl << chunk << std::endl << "================   End   ================" << std::endl;
-		#endif
-
-		resp.body = chunk;
-
-		response = response.substr(pos+4+chunklen);
-
-		unsigned int CHUNKLEN = 0;
 		do {
 
+			// This parses whatever's still in the 'response' buffer, and sets 'chunk' to
+			// the contents of the most recent chunk, to the amount available. It also sets
+			// 'CHUNKLEN' to the expected length of the chunk.
+			while(!response.empty()) {
+
+				unsigned int CHUNKLEN = 0;
+				unsigned int pos = response.find("\r\n");
+
+				// Our response is empty and/or doesn't contain delimiters
+				if (pos == std::string::npos) {
+					break;
+				}
+
+				#ifdef DEBUG
+				std::cout << "=============== RESPONSE BUFFER ===============" << std::endl << response << std::endl << "===============================================" << std::endl;
+				#endif
+
+				std::string cl = response.substr(0, pos);
+
+				#ifdef DEBUG
+				std::cout << "Raw chunk length: '" << cl << '\'' << std::endl;
+				#endif
+
+				std::stringstream ss;
+				ss << std::hex << cl;
+				ss >> CHUNKLEN;
+
+				chunklen = CHUNKLEN;
+
+				#ifdef DEBUG
+				std::cout << "Chunk length: " << chunklen << 'B' << std::endl;
+				#endif
+
+				response = response.substr(pos+2);
+
+				if (response.length() >= chunklen) {
+					chunk = response.substr(0, chunklen);
+					response = lstrip(response.substr(chunklen));
+				}
+				else {
+					chunk = response;
+					response.clear();
+				}
+
+				body += chunk;
+
+			}
+
+			// If we reach here and the current chunk length is zero, then we must be done
+			if (chunklen == 0) {
+				break;
+			}
+
+			// ... Otherwise we have other chunks to fetch.
+			// TODO - this causes an indefinite wait when the remaining data to be fetched is
+			// an exact multiple of 'BUFFER_SIZE'
 			do {
 				std::memset(this->buffer, '\0', BUFFER_SIZE);
 				dataSize = recv(this->sock, this->buffer, BUFFER_SIZE, 0);
@@ -178,49 +264,20 @@ Glib::RefPtr< Gio::InputStream > http_loader::load_url(const litehtml::tstring& 
 				response += this->buffer;
 			} while (dataSize == BUFFER_SIZE);
 
-			pos = response.find("\r\n");
-
-			if (pos == std::string::npos) {
-				break;
+			if (chunk.length() < chunklen) {
+				chunk += response.substr(0, chunklen);
+				response = lstrip(response.substr(chunklen));
 			}
 
-			std::string tmp = response.substr(0, pos);
-
-			// The only way to clear the contents of a stringstream is to make a new stringstream...
-			std::stringstream s;
-			s << std::hex << tmp;
-			s >> CHUNKLEN;
-
-			#ifdef DEBUG
-			std::cout << "Chunk length: " << CHUNKLEN << 'B' << std::endl;
-			if (CHUNKLEN == 0) {
-				std::cout << '\'' << tmp << '\'' << std::endl;
-			}
-			#endif
-
-			chunk = response.substr(pos+2, CHUNKLEN);
-
-			#ifdef DEBUG
-			std::cout << "===============   Chunk   ===============" << std::endl << chunk << "================   End   ================" << std::endl;
-			#endif
-
-			resp.body += chunk;
-
-			response = response.substr(pos+4+CHUNKLEN);
-
-			#ifdef DEBUG
-			if (!response.empty()) {
-				std::cout << "Remaining response text after chunk parse: '" << response << '\'' << std::endl;
-			}
-			#endif
-
-		} while (CHUNKLEN > 0);
+		} while (chunklen > 0);
 	}
 
-	std::cout << resp.toString() << std::endl;
+	if (resp->content_type.first == "text") {
+		std::cout << resp->toString() << std::endl;
+		stream->add_data(resp->Body());
+	}
 
-	stream->add_data(resp.body);
-
+	delete resp;
 	return stream;
 }
 
